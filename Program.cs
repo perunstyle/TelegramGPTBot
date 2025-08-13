@@ -8,6 +8,7 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using RestSharp;
 using TelegramGPTBot;
+using TelegramGPTBot.Providers;
 
 internal class Program
 {
@@ -31,10 +32,17 @@ internal class Program
             return;
         }
 
-        if (string.IsNullOrEmpty(botConfig.OpenRouter.ApiKey))
+        // Создаем фабрику провайдеров
+        ChatProviderFactory providerFactory;
+        try
         {
-            Console.WriteLine("Ошибка: OpenRouter API Key не найден в конфигурации!");
-            Console.WriteLine("Пожалуйста, создайте файл appsettings.json с вашими ключами API.");
+            providerFactory = new ChatProviderFactory(botConfig);
+            Console.WriteLine($"Доступные провайдеры: {string.Join(", ", providerFactory.GetAvailableProviders())}");
+            Console.WriteLine($"Текущий провайдер: {providerFactory.GetCurrentProviderName()}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при инициализации провайдеров: {ex.Message}");
             return;
         }
 
@@ -48,7 +56,7 @@ internal class Program
 
         var updateHandler = new DefaultUpdateHandler(
             async (bot, update, token) =>
-                await HandleUpdateAsync(bot, update, token, botConfig.OpenRouter),
+                await HandleUpdateAsync(bot, update, token, providerFactory),
             HandlePollingErrorAsync
         );
 
@@ -68,7 +76,7 @@ internal class Program
         ITelegramBotClient botClient,
         Update update,
         CancellationToken cancellationToken,
-        OpenRouterConfig openRouterConfig
+        ChatProviderFactory providerFactory
     )
     {
         if (update.Type != UpdateType.Message || update.Message?.Text is null) //надо будет идент на юзера добавить
@@ -79,7 +87,21 @@ internal class Program
 
         Console.WriteLine($"Пользователь {chatId}: {userMessage}");
 
-        string reply = await AskOpenRouter(userMessage, openRouterConfig);
+        // Обработка команд управления провайдерами
+        if (userMessage.StartsWith("/"))
+        {
+            string commandReply = await HandleCommandAsync(userMessage, providerFactory);
+            await botClient.SendTextMessageAsync(
+                chatId: chatId,
+                text: commandReply,
+                cancellationToken: cancellationToken
+            );
+            return;
+        }
+
+        // Получаем ответ от текущего провайдера
+        var provider = providerFactory.GetProvider();
+        string reply = await provider.GetResponseAsync(userMessage, cancellationToken);
 
         await botClient.SendTextMessageAsync(
             chatId: chatId,
@@ -103,6 +125,41 @@ internal class Program
 
         Console.WriteLine($"Ошибка: {errorMessage}");
         return Task.CompletedTask;
+    }
+
+    static Task<string> HandleCommandAsync(string command, ChatProviderFactory providerFactory)
+    {
+        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var cmd = parts[0].ToLower();
+
+        switch (cmd)
+        {
+            case "/providers":
+                var availableProviders = providerFactory.GetAvailableProviders();
+                return Task.FromResult($"Доступные провайдеры:\n{string.Join("\n", availableProviders)}");
+
+            case "/current":
+                var currentProvider = providerFactory.GetCurrentProviderName();
+                return Task.FromResult($"Текущий провайдер: {currentProvider}");
+
+            case "/switch":
+                if (parts.Length < 2)
+                    return Task.FromResult("Использование: /switch <имя_провайдера>\nПример: /switch ChatGPTPlus");
+                
+                var targetProvider = parts[1];
+                providerFactory.SwitchProvider(targetProvider);
+                return Task.FromResult($"Переключен на провайдер: {targetProvider}");
+
+            case "/help":
+                return Task.FromResult(@"Доступные команды:
+/providers - показать доступные провайдеры
+/current - показать текущий провайдер
+/switch <провайдер> - переключиться на другой провайдер
+/help - показать эту справку");
+
+            default:
+                return Task.FromResult($"Неизвестная команда: {cmd}\nИспользуйте /help для справки");
+        }
     }
 
     static async Task<string> AskOpenRouter(string userInput, OpenRouterConfig config)
