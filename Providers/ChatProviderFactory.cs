@@ -23,6 +23,11 @@ public class ChatProviderFactory
             _providers["ChatGPTPlus"] = new ChatGPTPlusProvider(config.ChatGPTPlus);
         }
 
+        if (config.GoogleOAuth != null)
+        {
+            _providers["GoogleOAuth"] = new GoogleOAuthProvider(config.GoogleOAuth);
+        }
+
         // Проверяем доступность провайдеров
         var availableProviders = _providers.Where(p => p.Value.IsAvailable()).ToList();
         
